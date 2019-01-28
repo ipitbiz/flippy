@@ -1,0 +1,124 @@
+diff --git a/flippy.module b/flippy.module
+index 0ab5764..f731c3b 100755
+--- a/flippy.module
++++ b/flippy.module
+@@ -63,6 +63,8 @@ function flippy_form_node_type_edit_form_alter(&$form, FormStateInterface $form_
+     $flippy_custom_sorting = $flippy_settings->get('flippy_custom_sorting_' . $form['type']['#default_value']);
+     $flippy_sort = $flippy_settings->get('flippy_sort_' . $form['type']['#default_value']);
+     $flippy_order = $flippy_settings->get('flippy_order_' . $form['type']['#default_value']);
++    $flippy_taxonomy = $flippy_settings->get('flippy_taxonomy_' . $form['type']['#default_value']);
++    $flippy_taxonomy_list = $flippy_settings->get('flippy_taxonomy_list_' . $form['type']['#default_value']);
+ 
+     $form['flippy'] = [
+       '#type' => 'details',
+@@ -78,6 +80,50 @@ function flippy_form_node_type_edit_form_alter(&$form, FormStateInterface $form_
+       '#default_value' => isset($form['flippy']['flippy']) ? $form['flippy']['flippy'] : $flippy_node_type,
+     ];
+ 
++    $form['flippy']['flippy_taxonomy'] = [
++      '#type' => 'checkbox',
++      '#title' => t('Filter by taxonomy'),
++      '#default_value' => isset($form['flippy']['flippy_taxonomy']) ? $form['flippy']['flippy_taxonomy'] : $flippy_taxonomy,
++      '#states' => [
++        'visible' => [   // action to take.
++          ':input[name=flippy]' => ['checked' => TRUE],
++        ],
++      ],
++    ];
++
++    // List taxonomies that are in the content type.
++    $taxonomy_options = [];
++    $content_type_fields = \Drupal::service('entity_field.manager')
++      ->getFieldDefinitions('node', $form['type']['#default_value']);
++    foreach ($content_type_fields as $taxo_field) {
++      if (get_class($taxo_field) == 'Drupal\field\Entity\FieldConfig') {
++        // It is an additional field.
++        $itemDefinition = $taxo_field->getFieldStorageDefinition();
++        $schema_info = $itemDefinition->getSchema();
++
++        if (isset($schema_info['columns']['target_id'])) {
++          $entity = $itemDefinition->getPropertyDefinitions()['entity'];
++          $constrains = $entity->getConstraints();
++          if ($constrains['EntityType'] == 'taxonomy_term') {
++            $taxonomy_options[$taxo_field->getName()] = $taxo_field->getLabel();
++          }
++        }
++      }
++    }
++
++    $form['flippy']['flippy_taxonomy_list'] = [
++      '#type' => 'select',
++      '#title' => t('Select taxonomy'),
++      '#options' => $taxonomy_options,
++      '#default_value' => isset($form['flippy']['flippy_taxonomy_list']) ? $form['flippy']['flippy_taxonomy_list'] : $flippy_taxonomy_list,
++      '#description' => t('Select a taxonomy to filter.'),
++      '#states' => [
++        'visible' => [
++          ':input[name=flippy_taxonomy]' => ['checked' => TRUE],
++        ],
++      ],
++    ];
++
+     $form['flippy']['flippy_head'] = [
+       '#type' => 'checkbox',
+       '#title' => t('Add semantic previous and next links to the document HEAD'),
+@@ -323,6 +369,8 @@ function flippy_form_node_type_edit_form_alter(&$form, FormStateInterface $form_
+ function _flippy_node_type_form_submit($form, FormStateInterface $form_state) {
+   \Drupal::configFactory()->getEditable('flippy.settings')
+     ->set('flippy_' . $form['type']['#default_value'], $form_state->getValue('flippy'))
++    ->set('flippy_taxonomy_' . $form['type']['#default_value'], $form_state->getValue('flippy_taxonomy'))
++    ->set('flippy_taxonomy_list_' . $form['type']['#default_value'], $form_state->getValue('flippy_taxonomy_list'))
+     ->set('flippy_head_' . $form['type']['#default_value'], $form_state->getValue('flippy_head'))
+     ->set('flippy_show_empty_' . $form['type']['#default_value'], $form_state->getValue('flippy_show_empty'))
+     ->set('flippy_prev_label_' . $form['type']['#default_value'], $form_state->getValue('flippy_prev_label'))
+diff --git a/src/FlippyPager.php b/src/FlippyPager.php
+index 59aee9f..c6f63e8 100644
+--- a/src/FlippyPager.php
++++ b/src/FlippyPager.php
+@@ -175,6 +175,19 @@ class FlippyPager {
+         ->condition('nid', $node->id(), '!=')
+         ->addTag('node_access');
+ 
++      // Filter by taxonomy select in config.
++      $taxonomy_filter = $this->flippySettings
++        ->get('flippy_taxonomy_' . $node->getType());
++      if ($taxonomy_filter) {
++        $taxonomy = $this->flippySettings
++        ->get('flippy_taxonomy_list_' . $node->getType());
++        // Check if node has a value in the taxonomy.
++        if (isset($node->get($taxonomy)->target_id)) {
++          $taxonomy_id = $node->get($taxonomy)->target_id;
++          $query->condition($taxonomy, $taxonomy_id);
++        }
++      }
++
+       // Create the individual queries
+       $first = clone $query;
+       $prev = clone $query;
+@@ -356,7 +369,7 @@ class FlippyPager {
+           ];
+         }
+       }
+-      
++
+       // Create random list,
+       // todo: orderRandom is not available in entityQuery yet.
+       if ($this->flippySettings
+@@ -376,7 +389,7 @@ class FlippyPager {
+           'title' => $title
+         ];
+       }
+-      
++
+       // Finally set the current info for themers to use.
+       $list['current'] = [
+         'nid' => $node->id(),
+@@ -387,7 +400,7 @@ class FlippyPager {
+     }
+     return $master_list[$node->id()];
+   }
+-  
++
+   /**
+    * Determine if the Flippy pager should be shown for the give node.
+    *
